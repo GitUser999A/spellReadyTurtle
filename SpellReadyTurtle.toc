@@ -1,0 +1,8 @@
+## Interface: 11200
+## Title: SpellReady |cff7fff7f Hunter|r
+## Notes: Center-screen pulse when selected spells become ready
+## Author: Duskrunner
+## Version: 1.0.0
+## SavedVariables: SpellReadyDB
+
+SpellReady.lua
