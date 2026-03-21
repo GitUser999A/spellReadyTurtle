@@ -539,6 +539,8 @@ local function UpdateAmmoProcHighlight(elapsed)
     if not ammoPulse.lockAndLoadActive then
       if aimedShotArrows.glow then aimedShotArrows.glow:Hide() end
       if aimedShotArrows.core then aimedShotArrows.core:Hide() end
+      if aimedShotArrows.borderGlow then aimedShotArrows.borderGlow:Hide() end
+      if aimedShotArrows.borderRing then aimedShotArrows.borderRing:Hide() end
     end
   end
 
@@ -547,22 +549,33 @@ local function UpdateAmmoProcHighlight(elapsed)
   local wave2 = (math.sin(ammoPulse.t * 5.5 + 1.1) + 1.0) * 0.5
 
   if ammoPulse.lockAndLoadActive and aimedShotArrows then
-    local pulseScale = 0.95 + (0.10 * wave)
-    local bob = math.sin(ammoPulse.t * 8.5) * 2
+    local pulseScale = 1.00 + (0.18 * wave)
+    local bob = math.sin(ammoPulse.t * 7.5) * 1
     local core = aimedShotArrows.core
     local glow = aimedShotArrows.glow
+    local borderGlow = aimedShotArrows.borderGlow
+    local borderRing = aimedShotArrows.borderRing
     local baseSize = aimedShotArrows.baseSize or 22
     local glowSize = aimedShotArrows.glowSize or (baseSize + 10)
     local fontPath = aimedShotArrows.fontPath or SR_FONT_PATH
     local x = aimedShotArrows.srX or 0
     local y = (aimedShotArrows.srY or 10) + bob
 
+    if borderGlow then
+      borderGlow:SetAlpha(0.30 + (0.22 * wave2))
+      borderGlow:Show()
+    end
+    if borderRing then
+      borderRing:SetAlpha(0.65 + (0.20 * wave))
+      borderRing:Show()
+    end
+
     if glow then
       glow:SetFont(fontPath, math.floor(glowSize * pulseScale), "OUTLINE")
       glow:ClearAllPoints()
       glow:SetPoint("BOTTOM", designBButtonBySpell["Aimed Shot"], "TOP", x, y)
-      glow:SetAlpha(0.45 + (0.25 * wave2))
-      glow:SetTextColor(1.0, 0.84, 0.18)
+      glow:SetAlpha(0.65 + (0.20 * wave2))
+      glow:SetTextColor(1.0, 0.88, 0.22)
       glow:Show()
     end
 
@@ -570,7 +583,7 @@ local function UpdateAmmoProcHighlight(elapsed)
       core:SetFont(fontPath, math.floor(baseSize * pulseScale), "OUTLINE")
       core:ClearAllPoints()
       core:SetPoint("BOTTOM", designBButtonBySpell["Aimed Shot"], "TOP", x, y)
-      core:SetAlpha(0.85 + (0.10 * wave))
+      core:SetAlpha(0.95)
       core:SetTextColor(1.0, 0.94, 0.55)
       core:Show()
     end
@@ -723,6 +736,8 @@ local function RefreshDesignBBar()
     if arrows then
       if arrows.glow then arrows.glow:Hide() end
       if arrows.core then arrows.core:Hide() end
+      if arrows.borderGlow then arrows.borderGlow:Hide() end
+      if arrows.borderRing then arrows.borderRing:Hide() end
     end
   end
   designBArrowsBySpell = {}
@@ -791,16 +806,34 @@ local function RefreshDesignBBar()
         local fontPath = STANDARD_TEXT_FONT or SR_FONT_PATH
         local core = btn:CreateFontString(nil, "OVERLAY")
         local glowArrow = btn:CreateFontString(nil, "OVERLAY")
-        local baseSize = math.max(22, math.floor(iconSize * 0.46))
-        local glowSize = baseSize + 10
+        local borderGlow = btn:CreateTexture(nil, "OVERLAY")
+        local borderRing = btn:CreateTexture(nil, "OVERLAY")
+        local baseSize = math.max(30, math.floor(iconSize * 0.62))
+        local glowSize = baseSize + 16
         local xOffset = 0
-        local yOffset = 10
+        local yOffset = 12
+
+        borderGlow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+        borderGlow:SetBlendMode("ADD")
+        borderGlow:SetPoint("CENTER", btn, "CENTER", 0, 0)
+        borderGlow:SetWidth(iconSize * 1.45)
+        borderGlow:SetHeight(iconSize * 1.45)
+        borderGlow:SetVertexColor(1.0, 0.18, 0.18, 0.0)
+        borderGlow:Hide()
+
+        borderRing:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+        borderRing:SetBlendMode("ADD")
+        borderRing:SetPoint("CENTER", btn, "CENTER", 0, 0)
+        borderRing:SetWidth(iconSize * 1.82)
+        borderRing:SetHeight(iconSize * 1.82)
+        borderRing:SetVertexColor(1.0, 0.18, 0.18, 0.0)
+        borderRing:Hide()
 
         glowArrow:SetFont(fontPath, glowSize, "OUTLINE")
         glowArrow:SetText("^")
         glowArrow:SetJustifyH("CENTER")
-        glowArrow:SetTextColor(1.0, 0.84, 0.18)
-        glowArrow:SetShadowColor(1.0, 0.84, 0.18)
+        glowArrow:SetTextColor(1.0, 0.88, 0.22)
+        glowArrow:SetShadowColor(1.0, 0.88, 0.22)
         glowArrow:SetShadowOffset(0, 0)
         glowArrow:SetPoint("BOTTOM", btn, "TOP", xOffset, yOffset)
         glowArrow:Hide()
@@ -817,6 +850,8 @@ local function RefreshDesignBBar()
         designBArrowsBySpell[spellName] = {
           core = core,
           glow = glowArrow,
+          borderGlow = borderGlow,
+          borderRing = borderRing,
           srX = xOffset,
           srY = yOffset,
           baseSize = baseSize,
