@@ -14,6 +14,7 @@ local DEFAULT_SPELLS = {
   "Concussive Shot",
   "Distracting Shot",
   "Viper Sting",
+  "Serpent Sting",
   "Wyvern Sting",
   "Volley",
   "Raptor Strike",
@@ -33,6 +34,8 @@ local DEFAULT_SPELLS = {
   "Frost Trap",
 }
 
+table.sort(DEFAULT_SPELLS)
+
 local DEFAULT_ICON_SIZE = 110
 local DEFAULT_TEXT_SIZE = 240
 local DEFAULT_ROW_SIZE = 64
@@ -43,6 +46,10 @@ local SR_FONT_PATH = "Fonts\\FRIZQT__.TTF"
 
 local function SR_Print(msg)
   DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00SpellReady:|r " .. msg)
+end
+
+local function SR_PrintLoaded()
+  DEFAULT_CHAT_FRAME:AddMessage("|cff7fff7f[SpellReadyTurtle]|r Loaded. Open menu with |cffffff00/srt|r or |cffffff00/spellready|r.")
 end
 
 ------------------------------------------------------------
@@ -161,10 +168,438 @@ local testQueueIndex = 1
 local testSequenceActive = false
 local designBButtons = {}
 local designBButtonBySpell = {}
+local designBAmmoBorderBySpell = {}
+local designBArrowsBySpell = {}
 local designBFlyAnims = {}
 local designBRowFadeAnims = {}
+local IsDesignBMode
+local ammoPulse = {
+  activeSpell = nil,
+  eventSpell = nil,
+  eventExpiresAt = 0,
+  lockAndLoadActive = false,
+  t = 0,
+  scanT = 0,
+  r = 1.0,
+  g = 0.82,
+  b = 0.0,
+}
 
 local DESIGN_B_GAP = 4
+
+local SR_AMMO_BUFF_TO_SPELL = {
+  ["explosive ammunition"] = { spell = "Multi-Shot", r = 1.0, g = 0.84, b = 0.18 },
+  ["explossive ammunition"] = { spell = "Multi-Shot", r = 1.0, g = 0.84, b = 0.18 },
+  ["enchanted ammunition"] = { spell = "Arcane Shot", r = 1.0, g = 0.84, b = 0.18 },
+  ["poisonous ammunition"] = { spell = "Serpent Sting", r = 1.0, g = 0.84, b = 0.18 },
+}
+
+local srBuffScanTip = CreateFrame("GameTooltip", "SpellReadyBuffScanTooltip", nil, "GameTooltipTemplate")
+srBuffScanTip:SetOwner(UIParent, "ANCHOR_NONE")
+
+local function MatchAmmoSpellStrict(txt)
+  if not txt or txt == "" then return nil end
+  local s = string.lower(txt)
+
+  local direct = SR_AMMO_BUFF_TO_SPELL[s]
+  if direct then
+    return direct.spell, direct.r, direct.g, direct.b
+  end
+
+  for buffName, data in pairs(SR_AMMO_BUFF_TO_SPELL) do
+    if string.find(s, buffName, 1, true) then
+      return data.spell, data.r, data.g, data.b
+    end
+  end
+
+  return nil
+end
+
+local function MatchAmmoSpellFromText(txt)
+  local spell, r, g, b = MatchAmmoSpellStrict(txt)
+  if spell then
+    return spell, r, g, b
+  end
+
+  local s = string.lower(txt or "")
+
+  if string.find(s, "multi-shot", 1, true) or string.find(s, "explos", 1, true) then
+    local d = SR_AMMO_BUFF_TO_SPELL["explosive ammunition"]
+    return d.spell, d.r, d.g, d.b
+  end
+  if string.find(s, "arcane shot", 1, true) or string.find(s, "100% increased damage", 1, true) then
+    local d = SR_AMMO_BUFF_TO_SPELL["enchanted ammunition"]
+    return d.spell, d.r, d.g, d.b
+  end
+  if string.find(s, "serpent sting", 1, true) or string.find(s, "poison", 1, true) then
+    local d = SR_AMMO_BUFF_TO_SPELL["poisonous ammunition"]
+    return d.spell, d.r, d.g, d.b
+  end
+
+  return nil
+end
+
+local function MatchAmmoFromTooltipLines()
+  local i
+  for i = 1, 4 do
+    local left = getglobal("SpellReadyBuffScanTooltipTextLeft" .. i)
+    if left then
+      local spell, r, g, b = MatchAmmoSpellFromText(left:GetText())
+      if spell then
+        return spell, r, g, b
+      end
+    end
+  end
+  return nil
+end
+
+local function TryMatchAmmoFromPlayerBuffIndex(index)
+  if not srBuffScanTip or not srBuffScanTip.SetPlayerBuff then return nil end
+  if index == nil or index < 0 then return nil end
+  srBuffScanTip:ClearLines()
+  srBuffScanTip:SetPlayerBuff(index)
+  return MatchAmmoFromTooltipLines()
+end
+
+local function FindAmmoProcFromVisibleBuffButtons()
+  local seen = {}
+  local suffix
+  for suffix = 0, 32 do
+    local button = getglobal("BuffButton" .. suffix)
+    if button and button.IsVisible and button:IsVisible() then
+      local candidates = {
+        button.buffIndex,
+        button.GetID and button:GetID() or nil,
+        suffix,
+        suffix - 1,
+      }
+      local i
+      for i = 1, table.getn(candidates) do
+        local idx = candidates[i]
+        if idx ~= nil and idx >= 0 and not seen[idx] then
+          seen[idx] = true
+          local spell, r, g, b = TryMatchAmmoFromPlayerBuffIndex(idx)
+          if spell then
+            return spell, r, g, b
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local function SetActiveAmmoProc(spell, r, g, b)
+  if not spell then return end
+  ammoPulse.eventSpell = spell
+  ammoPulse.eventExpiresAt = (GetTime and GetTime() or 0) + 1.5
+  ammoPulse.activeSpell = spell
+  ammoPulse.t = 0
+  ammoPulse.r = r or ammoPulse.r
+  ammoPulse.g = g or ammoPulse.g
+  ammoPulse.b = b or ammoPulse.b
+  ammoPulse.scanT = 0
+end
+
+local function UpdateAmmoEventState(msg)
+  local s = string.lower(msg or "")
+
+  if string.find(s, "lock and load", 1, true) then
+    if string.find(s, "fade", 1, true) or string.find(s, "fades", 1, true) then
+      ammoPulse.lockAndLoadActive = false
+    else
+      ammoPulse.lockAndLoadActive = true
+    end
+    return true
+  end
+
+  if string.find(s, "you are afflicted by", 1, true) and string.find(s, "ammunition", 1, true) then
+    local spell, r, g, b = MatchAmmoSpellStrict(msg)
+    if spell then
+      SetActiveAmmoProc(spell, r, g, b)
+      return true
+    end
+  end
+
+  if string.find(s, "your ", 1, true) and string.find(s, " ammunition", 1, true) and string.find(s, " hits ", 1, true) then
+    local spell, r, g, b = MatchAmmoSpellStrict(msg)
+    if spell then
+      SetActiveAmmoProc(spell, r, g, b)
+      return true
+    end
+  end
+
+  if string.find(s, " is afflicted by ", 1, true) and string.find(s, "ammunition", 1, true) then
+    local spell, r, g, b = MatchAmmoSpellStrict(msg)
+    if spell then
+      SetActiveAmmoProc(spell, r, g, b)
+      return true
+    end
+  end
+
+  if string.find(s, "ammunition", 1, true) and (string.find(s, "fade", 1, true) or string.find(s, "fades", 1, true) or string.find(s, "removed", 1, true)) then
+    local fadedSpell = MatchAmmoSpellStrict(msg)
+    if fadedSpell and ammoPulse.eventSpell == fadedSpell then
+      ammoPulse.eventSpell = nil
+      ammoPulse.eventExpiresAt = 0
+      ammoPulse.activeSpell = nil
+    end
+    ammoPulse.scanT = 0
+    return true
+  end
+
+  local spell, r, g, b = MatchAmmoSpellStrict(msg)
+  if spell then
+    SetActiveAmmoProc(spell, r, g, b)
+    return true
+  end
+
+  if string.find(s, "multi-shot", 1, true) or string.find(s, "arcane shot", 1, true) or string.find(s, "serpent sting", 1, true) then
+    ammoPulse.eventSpell = nil
+    ammoPulse.eventExpiresAt = 0
+    ammoPulse.activeSpell = nil
+    ammoPulse.scanT = 0
+    return true
+  end
+
+  if string.find(s, "aimed shot", 1, true) then
+    ammoPulse.lockAndLoadActive = false
+    ammoPulse.scanT = 0
+    return true
+  end
+
+  return false
+end
+
+local function GetPlayerBuffName(index)
+  if not UnitBuff then return nil end
+
+  local v1 = UnitBuff("player", index)
+  if not v1 then return nil end
+
+  -- Clients with modern aura returns may provide the name directly.
+  if type(v1) == "string" and not string.find(v1, "\\") then
+    return v1
+  end
+
+  if srBuffScanTip and srBuffScanTip.SetUnitBuff then
+    srBuffScanTip:ClearLines()
+    srBuffScanTip:SetUnitBuff("player", index)
+    local left = getglobal("SpellReadyBuffScanTooltipTextLeft1")
+    if left then
+      return left:GetText()
+    end
+  end
+
+  return nil
+end
+
+local function FindActiveAmmoProcSpell()
+  local idx
+
+  -- Modern/compat path: UnitBuff with tolerant index handling.
+  if UnitBuff then
+    local miss = 0
+    for idx = 0, 50 do
+      local hadAny = false
+
+      local a = UnitBuff("player", idx)
+      if a then
+        hadAny = true
+        local buffName = GetPlayerBuffName(idx)
+        local spell, r, g, b = MatchAmmoSpellFromText(buffName)
+        if spell then
+          return spell, r, g, b
+        end
+
+        if srBuffScanTip and srBuffScanTip.SetUnitBuff then
+          srBuffScanTip:ClearLines()
+          srBuffScanTip:SetUnitBuff("player", idx)
+          spell, r, g, b = MatchAmmoFromTooltipLines()
+          if spell then
+            return spell, r, g, b
+          end
+        end
+      end
+
+      local b = UnitBuff("player", idx + 1)
+      if b then
+        hadAny = true
+        local buffName = GetPlayerBuffName(idx + 1)
+        local spell, r, g, bb = MatchAmmoSpellFromText(buffName)
+        if spell then
+          return spell, r, g, bb
+        end
+
+        if srBuffScanTip and srBuffScanTip.SetUnitBuff then
+          srBuffScanTip:ClearLines()
+          srBuffScanTip:SetUnitBuff("player", idx + 1)
+          spell, r, g, bb = MatchAmmoFromTooltipLines()
+          if spell then
+            return spell, r, g, bb
+          end
+        end
+      end
+
+      if hadAny then
+        miss = 0
+      else
+        miss = miss + 1
+        if miss >= 8 and idx >= 8 then
+          break
+        end
+      end
+    end
+  end
+
+  -- Vanilla fallback: GetPlayerBuff + tooltip text.
+  if GetPlayerBuff and srBuffScanTip and srBuffScanTip.SetPlayerBuff then
+    for idx = 0, 31 do
+      local buffIndex = GetPlayerBuff(idx, "HELPFUL")
+      if buffIndex and buffIndex >= 0 then
+        srBuffScanTip:ClearLines()
+        srBuffScanTip:SetPlayerBuff(buffIndex)
+        local spell, r, g, b = MatchAmmoFromTooltipLines()
+        if spell then
+          return spell, r, g, b
+        end
+      end
+    end
+  end
+
+  local spell, r, g, b = FindAmmoProcFromVisibleBuffButtons()
+  if spell then
+    return spell, r, g, b
+  end
+
+  return nil
+end
+
+local function ClearAmmoProcBorders()
+  for _, borderFx in pairs(designBAmmoBorderBySpell) do
+    if borderFx then
+      if borderFx.glow then borderFx.glow:Hide() end
+      if borderFx.ring then borderFx.ring:Hide() end
+    end
+  end
+  for _, arrows in pairs(designBArrowsBySpell) do
+    if arrows then
+      for i = 1, 3 do
+        if arrows[i] then arrows[i]:Hide() end
+      end
+    end
+  end
+  ammoPulse.activeSpell = nil
+  ammoPulse.t = 0
+end
+
+local function UpdateAmmoProcHighlight(elapsed)
+  if not IsDesignBMode() then
+    ClearAmmoProcBorders()
+    return
+  end
+
+  ammoPulse.scanT = ammoPulse.scanT + elapsed
+  if ammoPulse.scanT >= 0.15 then
+    ammoPulse.scanT = 0
+    local spellName, r, g, b = FindActiveAmmoProcSpell()
+    local now = GetTime and GetTime() or 0
+
+    if not spellName and ammoPulse.eventSpell and now <= (ammoPulse.eventExpiresAt or 0) then
+      spellName = ammoPulse.eventSpell
+    end
+
+    if not spellName and ammoPulse.eventSpell and now > (ammoPulse.eventExpiresAt or 0) then
+      ammoPulse.eventSpell = nil
+      ammoPulse.eventExpiresAt = 0
+      ammoPulse.activeSpell = nil
+    end
+
+    if spellName and spellName ~= ammoPulse.activeSpell then
+      ammoPulse.activeSpell = spellName
+      ammoPulse.t = 0
+    end
+
+    if spellName then
+      ammoPulse.r = r or ammoPulse.r or 1.0
+      ammoPulse.g = g or ammoPulse.g or 0.82
+      ammoPulse.b = b or ammoPulse.b or 0.0
+    end
+  end
+
+  for spellName, borderFx in pairs(designBAmmoBorderBySpell) do
+    if borderFx and spellName ~= ammoPulse.activeSpell then
+      if borderFx.glow then borderFx.glow:Hide() end
+      if borderFx.ring then borderFx.ring:Hide() end
+    end
+  end
+
+  local aimedShotArrows = designBArrowsBySpell["Aimed Shot"]
+  if aimedShotArrows then
+    if not ammoPulse.lockAndLoadActive then
+      if aimedShotArrows.glow then aimedShotArrows.glow:Hide() end
+      if aimedShotArrows.core then aimedShotArrows.core:Hide() end
+    end
+  end
+
+  ammoPulse.t = ammoPulse.t + elapsed
+  local wave = (math.sin(ammoPulse.t * 8.0) + 1.0) * 0.5
+  local wave2 = (math.sin(ammoPulse.t * 5.5 + 1.1) + 1.0) * 0.5
+
+  if ammoPulse.lockAndLoadActive and aimedShotArrows then
+    local pulseScale = 0.95 + (0.10 * wave)
+    local bob = math.sin(ammoPulse.t * 8.5) * 2
+    local core = aimedShotArrows.core
+    local glow = aimedShotArrows.glow
+    local baseSize = aimedShotArrows.baseSize or 22
+    local glowSize = aimedShotArrows.glowSize or (baseSize + 10)
+    local fontPath = aimedShotArrows.fontPath or SR_FONT_PATH
+    local x = aimedShotArrows.srX or 0
+    local y = (aimedShotArrows.srY or 10) + bob
+
+    if glow then
+      glow:SetFont(fontPath, math.floor(glowSize * pulseScale), "OUTLINE")
+      glow:ClearAllPoints()
+      glow:SetPoint("BOTTOM", designBButtonBySpell["Aimed Shot"], "TOP", x, y)
+      glow:SetAlpha(0.45 + (0.25 * wave2))
+      glow:SetTextColor(1.0, 0.84, 0.18)
+      glow:Show()
+    end
+
+    if core then
+      core:SetFont(fontPath, math.floor(baseSize * pulseScale), "OUTLINE")
+      core:ClearAllPoints()
+      core:SetPoint("BOTTOM", designBButtonBySpell["Aimed Shot"], "TOP", x, y)
+      core:SetAlpha(0.85 + (0.10 * wave))
+      core:SetTextColor(1.0, 0.94, 0.55)
+      core:Show()
+    end
+  end
+
+  if not ammoPulse.activeSpell then return end
+
+  local borderFx = designBAmmoBorderBySpell[ammoPulse.activeSpell]
+  if not borderFx then return end
+  local ring = borderFx.ring
+  local glow = borderFx.glow
+  local iconSize = borderFx.iconSize or (SpellReadyDB.designBSize or DEFAULT_ROW_SIZE)
+  if not ring or not glow then return end
+
+  local ringScale = 1.82 + (0.16 * wave2)
+  local glowScale = 1.48 + (0.08 * wave)
+  ring:SetWidth(iconSize * ringScale)
+  ring:SetHeight(iconSize * ringScale)
+  glow:SetWidth(iconSize * glowScale)
+  glow:SetHeight(iconSize * glowScale)
+
+  local ringA = 0.78 + (0.22 * wave)
+  local glowA = 0.36 + (0.26 * wave2)
+
+  ring:SetVertexColor(ammoPulse.r, ammoPulse.g, ammoPulse.b, ringA)
+  glow:SetVertexColor(ammoPulse.r, ammoPulse.g, ammoPulse.b, glowA)
+  glow:Show()
+  ring:Show()
+end
 
 local designBBar = CreateFrame("Frame", "SpellReadyDesignBBar", UIParent)
 designBBar:SetWidth(1)
@@ -174,7 +609,7 @@ designBBar:EnableMouse(true)
 designBBar:RegisterForDrag("LeftButton")
 designBBar:Hide()
 
-local function IsDesignBMode()
+IsDesignBMode = function()
   return (SpellReadyDB and SpellReadyDB.designMode) == "B"
 end
 
@@ -283,6 +718,15 @@ local function RefreshDesignBBar()
     designBButtons[i] = nil
   end
   designBButtonBySpell = {}
+  designBAmmoBorderBySpell = {}
+  for spellName, arrows in pairs(designBArrowsBySpell) do
+    if arrows then
+      if arrows.glow then arrows.glow:Hide() end
+      if arrows.core then arrows.core:Hide() end
+    end
+  end
+  designBArrowsBySpell = {}
+  ClearAmmoProcBorders()
 
   if not IsDesignBMode() then
     designBBar:Hide()
@@ -307,6 +751,25 @@ local function RefreshDesignBBar()
       tex:SetAllPoints(btn)
       tex:SetTexture(GetSpellIcon(spellName) or "Interface\\Icons\\INV_Misc_QuestionMark")
       btn.tex = tex
+
+      local glow = btn:CreateTexture(nil, "OVERLAY")
+      glow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+      glow:SetBlendMode("ADD")
+      glow:SetPoint("CENTER", btn, "CENTER", 0, 0)
+      glow:SetWidth(iconSize * 1.5)
+      glow:SetHeight(iconSize * 1.5)
+      glow:SetVertexColor(1.0, 0.84, 0.2, 0.0)
+      glow:Hide()
+
+      local ring = btn:CreateTexture(nil, "OVERLAY")
+      ring:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+      ring:SetBlendMode("ADD")
+      ring:SetPoint("CENTER", btn, "CENTER", 0, 0)
+      ring:SetWidth(iconSize * 1.85)
+      ring:SetHeight(iconSize * 1.85)
+      ring:SetVertexColor(1.0, 0.84, 0.2, 0.0)
+      ring:Hide()
+
       btn.spellName = spellName
       if IsSpellOnCooldown(spellName) then
         btn:SetAlpha(GetDesignBUsedAlpha())
@@ -318,6 +781,49 @@ local function RefreshDesignBBar()
       count = count + 1
       designBButtons[count] = btn
       designBButtonBySpell[spellName] = btn
+      designBAmmoBorderBySpell[spellName] = {
+        glow = glow,
+        ring = ring,
+        iconSize = iconSize,
+      }
+
+      if spellName == "Aimed Shot" then
+        local fontPath = STANDARD_TEXT_FONT or SR_FONT_PATH
+        local core = btn:CreateFontString(nil, "OVERLAY")
+        local glowArrow = btn:CreateFontString(nil, "OVERLAY")
+        local baseSize = math.max(22, math.floor(iconSize * 0.46))
+        local glowSize = baseSize + 10
+        local xOffset = 0
+        local yOffset = 10
+
+        glowArrow:SetFont(fontPath, glowSize, "OUTLINE")
+        glowArrow:SetText("^")
+        glowArrow:SetJustifyH("CENTER")
+        glowArrow:SetTextColor(1.0, 0.84, 0.18)
+        glowArrow:SetShadowColor(1.0, 0.84, 0.18)
+        glowArrow:SetShadowOffset(0, 0)
+        glowArrow:SetPoint("BOTTOM", btn, "TOP", xOffset, yOffset)
+        glowArrow:Hide()
+
+        core:SetFont(fontPath, baseSize, "OUTLINE")
+        core:SetText("^")
+        core:SetJustifyH("CENTER")
+        core:SetTextColor(1.0, 0.94, 0.55)
+        core:SetShadowColor(1.0, 0.84, 0.18)
+        core:SetShadowOffset(0, 0)
+        core:SetPoint("BOTTOM", btn, "TOP", xOffset, yOffset)
+        core:Hide()
+
+        designBArrowsBySpell[spellName] = {
+          core = core,
+          glow = glowArrow,
+          srX = xOffset,
+          srY = yOffset,
+          baseSize = baseSize,
+          glowSize = glowSize,
+          fontPath = fontPath,
+        }
+      end
     end
   end
 
@@ -611,6 +1117,9 @@ local menu = CreateFrame("Frame", "SpellReadyMenu", UIParent)
 menu:SetWidth(490) -- wider to prevent control overlap
 -- height will be set later after we know how many rows we need
 menu:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+menu:SetToplevel(true)
+menu:SetClampedToScreen(true)
+menu:SetFrameStrata("DIALOG")
 menu:SetMovable(true)
 menu:EnableMouse(true)
 menu:RegisterForDrag("LeftButton")
@@ -1191,6 +1700,8 @@ BuildMenu = function()
   local startY = -60
   local startX = 18
   local rowH = ROW_H
+  local spellCount = table.getn(DEFAULT_SPELLS)
+  local rowsPerColumn = math.floor((spellCount + SPELL_LIST_COLUMNS - 1) / SPELL_LIST_COLUMNS)
 
   for idx, spellName in ipairs(DEFAULT_SPELLS) do
     if SpellReadyDB.spells[spellName] == nil then
@@ -1198,8 +1709,8 @@ BuildMenu = function()
     end
 
     local zero = idx - 1
-    local col = math.mod(zero, SPELL_LIST_COLUMNS)
-    local row = math.floor(zero / SPELL_LIST_COLUMNS)
+    local col = math.floor(zero / rowsPerColumn)
+    local row = math.mod(zero, rowsPerColumn)
     local x = startX + (col * (SPELL_LIST_COL_W + SPELL_LIST_COL_GAP))
     local y = startY - (row * rowH)
 
@@ -1208,8 +1719,7 @@ BuildMenu = function()
   end
 
   -- Resize menu so all spells fit (no overflow)
-  local spellCount = table.getn(DEFAULT_SPELLS)
-  local neededRows = math.floor((spellCount + SPELL_LIST_COLUMNS - 1) / SPELL_LIST_COLUMNS)
+  local neededRows = rowsPerColumn
   local neededH = MENU_PADDING_TOP + (neededRows * rowH) + MENU_PADDING_BOTTOM
   if neededH < MENU_MIN_H then neededH = MENU_MIN_H end
   menu:SetHeight(neededH)
@@ -1274,25 +1784,45 @@ end
 ------------------------------------------------------------
 local driver = CreateFrame("Frame")
 driver:RegisterEvent("PLAYER_LOGIN")
+driver:RegisterEvent("PLAYER_AURAS_CHANGED")
+driver:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
+driver:RegisterEvent("CHAT_MSG_SPELL_SELF_BUFF")
+driver:RegisterEvent("CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS")
+driver:RegisterEvent("CHAT_MSG_SPELL_AURA_GONE_SELF")
+driver:RegisterEvent("CHAT_MSG_COMBAT_SELF_HITS")
+driver:RegisterEvent("CHAT_MSG_SPELL_CAST_SELF")
 driver:SetScript("OnEvent", function()
-  EnsureDefaults()
-  ApplyPulsePosition()
-  ApplyDesignBBarPosition()
-  UpdatePulseTextStyle()
-  BuildMenu()
-
-  -- init cooldown states
-  for spellName, enabled in pairs(SpellReadyDB.spells) do
-    if enabled then
-      lastOnCD[spellName] = IsSpellOnCooldown(spellName)
-    end
+  if event == "PLAYER_AURAS_CHANGED" then
+    ammoPulse.scanT = 0
+    return
   end
 
-  SR_Print("Loaded. Type /sr to open the menu.")
+  if event == "CHAT_MSG_SPELL_SELF_DAMAGE" or event == "CHAT_MSG_COMBAT_SELF_HITS" or event == "CHAT_MSG_SPELL_SELF_BUFF" or event == "CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS" or event == "CHAT_MSG_SPELL_AURA_GONE_SELF" or event == "CHAT_MSG_SPELL_CAST_SELF" then
+    UpdateAmmoEventState(arg1)
+    return
+  end
+
+  if event == "PLAYER_LOGIN" then
+    EnsureDefaults()
+    ApplyPulsePosition()
+    ApplyDesignBBarPosition()
+    UpdatePulseTextStyle()
+    BuildMenu()
+
+    -- init cooldown states
+    for spellName, enabled in pairs(SpellReadyDB.spells) do
+      if enabled then
+        lastOnCD[spellName] = IsSpellOnCooldown(spellName)
+      end
+    end
+
+    SR_PrintLoaded()
+  end
 end)
 
 driver:SetScript("OnUpdate", function()
   ScanSpellsAndTrigger()
+  UpdateAmmoProcHighlight(arg1)
 
   local i
   for i = table.getn(designBFlyAnims), 1, -1 do
@@ -1374,9 +1904,10 @@ end)
 ------------------------------------------------------------
 -- Slash command: /sr
 ------------------------------------------------------------
-SLASH_SPELLREADY1 = "/sr"
-SLASH_SPELLREADY2 = "/spellready"
-SlashCmdList["SPELLREADY"] = function(msg)
+SLASH_SPELLREADYTURTLE1 = "/sr"
+SLASH_SPELLREADYTURTLE2 = "/srt"
+SLASH_SPELLREADYTURTLE3 = "/spellready"
+SlashCmdList["SPELLREADYTURTLE"] = function(msg)
   msg = string.lower(msg or "")
 
   if msg == "test" then
@@ -1387,6 +1918,9 @@ SlashCmdList["SPELLREADY"] = function(msg)
   if menu:IsShown() then
     menu:Hide()
   else
+    menu:ClearAllPoints()
+    menu:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    menu:Raise()
     menu:Show()
   end
 end
