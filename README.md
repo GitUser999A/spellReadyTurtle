@@ -61,10 +61,3 @@ How it works in-game:
 Proc highlight example:
 
 ![Ammo proc highlight example](media/proc-highlight-example.png)
-
-<img width="2559" height="1439" alt="image" src="https://github.com/user-attachments/assets/4a5dbd1e-12b9-40c0-8d09-444d34c19037" />
-<img width="304" height="233" alt="image" src="https://github.com/user-attachments/assets/501b6d6e-cade-4586-883a-b6180d2024f9" />
-
-<img width="276" height="194" alt="image" src="https://github.com/user-attachments/assets/bb9115fb-6e63-49d4-8a1a-564263cff9ab" />
-<img width="460" height="383" alt="image" src="https://github.com/user-attachments/assets/f11f574f-b169-43b7-87e2-dccfb5ec8c72" />
-<img width="436" height="440" alt="image" src="https://github.com/user-attachments/assets/ddfadfbe-c18a-4232-95dc-d8e2da873597" />
