@@ -42,6 +42,7 @@ local DEFAULT_ROW_SIZE = 64
 local DEFAULT_ICON_FADE = 1.20
 local DEFAULT_TEXT_FADE = 1.20
 local DEFAULT_B_USED_ALPHA = 0.35
+local LOCK_AND_LOAD_DURATION = 10
 local SR_FONT_PATH = "Fonts\\FRIZQT__.TTF"
 
 local function SR_Print(msg)
@@ -178,6 +179,7 @@ local ammoPulse = {
   eventSpell = nil,
   eventExpiresAt = 0,
   lockAndLoadActive = false,
+  lockAndLoadExpiresAt = 0,
   t = 0,
   scanT = 0,
   r = 1.0,
@@ -307,8 +309,16 @@ local function UpdateAmmoEventState(msg)
   if string.find(s, "lock and load", 1, true) then
     if string.find(s, "fade", 1, true) or string.find(s, "fades", 1, true) then
       ammoPulse.lockAndLoadActive = false
+      ammoPulse.lockAndLoadExpiresAt = 0
+      ammoPulse.eventSpell = nil
+      ammoPulse.eventExpiresAt = 0
+      ammoPulse.activeSpell = nil
     else
+      local now = GetTime and GetTime() or 0
       ammoPulse.lockAndLoadActive = true
+      ammoPulse.lockAndLoadExpiresAt = now + LOCK_AND_LOAD_DURATION
+      SetActiveAmmoProc("Aimed Shot", 1.0, 0.82, 0.0)
+      ammoPulse.eventExpiresAt = now + LOCK_AND_LOAD_DURATION
     end
     return true
   end
@@ -364,6 +374,10 @@ local function UpdateAmmoEventState(msg)
 
   if string.find(s, "aimed shot", 1, true) then
     ammoPulse.lockAndLoadActive = false
+    ammoPulse.lockAndLoadExpiresAt = 0
+    ammoPulse.eventSpell = nil
+    ammoPulse.eventExpiresAt = 0
+    ammoPulse.activeSpell = nil
     ammoPulse.scanT = 0
     return true
   end
@@ -484,9 +498,9 @@ local function ClearAmmoProcBorders()
   end
   for _, arrows in pairs(designBArrowsBySpell) do
     if arrows then
-      for i = 1, 3 do
-        if arrows[i] then arrows[i]:Hide() end
-      end
+      if arrows.timer then arrows.timer:Hide() end
+      if arrows.borderGlow then arrows.borderGlow:Hide() end
+      if arrows.borderRing then arrows.borderRing:Hide() end
     end
   end
   ammoPulse.activeSpell = nil
@@ -535,10 +549,18 @@ local function UpdateAmmoProcHighlight(elapsed)
   end
 
   local aimedShotArrows = designBArrowsBySpell["Aimed Shot"]
+  local now = GetTime and GetTime() or 0
+  if ammoPulse.lockAndLoadActive and now > (ammoPulse.lockAndLoadExpiresAt or 0) then
+    ammoPulse.lockAndLoadActive = false
+    ammoPulse.lockAndLoadExpiresAt = 0
+    if ammoPulse.activeSpell == "Aimed Shot" then
+      ammoPulse.activeSpell = nil
+    end
+  end
+
   if aimedShotArrows then
     if not ammoPulse.lockAndLoadActive then
-      if aimedShotArrows.glow then aimedShotArrows.glow:Hide() end
-      if aimedShotArrows.core then aimedShotArrows.core:Hide() end
+      if aimedShotArrows.timer then aimedShotArrows.timer:Hide() end
       if aimedShotArrows.borderGlow then aimedShotArrows.borderGlow:Hide() end
       if aimedShotArrows.borderRing then aimedShotArrows.borderRing:Hide() end
     end
@@ -549,43 +571,40 @@ local function UpdateAmmoProcHighlight(elapsed)
   local wave2 = (math.sin(ammoPulse.t * 5.5 + 1.1) + 1.0) * 0.5
 
   if ammoPulse.lockAndLoadActive and aimedShotArrows then
-    local pulseScale = 1.00 + (0.18 * wave)
-    local bob = math.sin(ammoPulse.t * 7.5) * 1
-    local core = aimedShotArrows.core
-    local glow = aimedShotArrows.glow
+    local timer = aimedShotArrows.timer
     local borderGlow = aimedShotArrows.borderGlow
     local borderRing = aimedShotArrows.borderRing
     local baseSize = aimedShotArrows.baseSize or 22
-    local glowSize = aimedShotArrows.glowSize or (baseSize + 10)
+    local timerSize = aimedShotArrows.timerSize or math.max(14, math.floor(baseSize * 0.48))
     local fontPath = aimedShotArrows.fontPath or SR_FONT_PATH
     local x = aimedShotArrows.srX or 0
-    local y = (aimedShotArrows.srY or 10) + bob
+    local y = aimedShotArrows.timerY or (aimedShotArrows.srY or 10)
+    local remaining = math.max(0, (ammoPulse.lockAndLoadExpiresAt or 0) - now)
+    local isUrgent = remaining <= 3.0
 
     if borderGlow then
       borderGlow:SetAlpha(0.30 + (0.22 * wave2))
+      borderGlow:SetVertexColor(1.0, 1.0, 1.0, 1.0)
       borderGlow:Show()
     end
     if borderRing then
       borderRing:SetAlpha(0.65 + (0.20 * wave))
+      borderRing:SetVertexColor(1.0, 1.0, 1.0, 1.0)
       borderRing:Show()
     end
 
-    if glow then
-      glow:SetFont(fontPath, math.floor(glowSize * pulseScale), "OUTLINE")
-      glow:ClearAllPoints()
-      glow:SetPoint("BOTTOM", designBButtonBySpell["Aimed Shot"], "TOP", x, y)
-      glow:SetAlpha(0.65 + (0.20 * wave2))
-      glow:SetTextColor(1.0, 0.88, 0.22)
-      glow:Show()
-    end
-
-    if core then
-      core:SetFont(fontPath, math.floor(baseSize * pulseScale), "OUTLINE")
-      core:ClearAllPoints()
-      core:SetPoint("BOTTOM", designBButtonBySpell["Aimed Shot"], "TOP", x, y)
-      core:SetAlpha(0.95)
-      core:SetTextColor(1.0, 0.94, 0.55)
-      core:Show()
+    if timer then
+      timer:SetFont(fontPath, timerSize, "OUTLINE")
+      timer:ClearAllPoints()
+      timer:SetPoint("BOTTOM", designBButtonBySpell["Aimed Shot"], "TOP", x, y)
+      timer:SetText(string.format("%.1f", remaining))
+      timer:SetAlpha(0.90 + (0.10 * wave))
+      if isUrgent then
+        timer:SetTextColor(1.0, 0.22, 0.22)
+      else
+        timer:SetTextColor(1.0, 1.0, 1.0)
+      end
+      timer:Show()
     end
   end
 
@@ -804,14 +823,14 @@ local function RefreshDesignBBar()
 
       if spellName == "Aimed Shot" then
         local fontPath = STANDARD_TEXT_FONT or SR_FONT_PATH
-        local core = btn:CreateFontString(nil, "OVERLAY")
-        local glowArrow = btn:CreateFontString(nil, "OVERLAY")
+        local timerText = btn:CreateFontString(nil, "OVERLAY")
         local borderGlow = btn:CreateTexture(nil, "OVERLAY")
         local borderRing = btn:CreateTexture(nil, "OVERLAY")
         local baseSize = math.max(30, math.floor(iconSize * 0.62))
-        local glowSize = baseSize + 16
+        local timerSize = math.max(18, math.floor(baseSize * 0.62))
         local xOffset = 0
         local yOffset = 12
+        local timerYOffset = yOffset + math.max(10, math.floor(baseSize * 0.55))
 
         borderGlow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
         borderGlow:SetBlendMode("ADD")
@@ -829,33 +848,23 @@ local function RefreshDesignBBar()
         borderRing:SetVertexColor(1.0, 0.18, 0.18, 0.0)
         borderRing:Hide()
 
-        glowArrow:SetFont(fontPath, glowSize, "OUTLINE")
-        glowArrow:SetText("^")
-        glowArrow:SetJustifyH("CENTER")
-        glowArrow:SetTextColor(1.0, 0.88, 0.22)
-        glowArrow:SetShadowColor(1.0, 0.88, 0.22)
-        glowArrow:SetShadowOffset(0, 0)
-        glowArrow:SetPoint("BOTTOM", btn, "TOP", xOffset, yOffset)
-        glowArrow:Hide()
-
-        core:SetFont(fontPath, baseSize, "OUTLINE")
-        core:SetText("^")
-        core:SetJustifyH("CENTER")
-        core:SetTextColor(1.0, 0.94, 0.55)
-        core:SetShadowColor(1.0, 0.84, 0.18)
-        core:SetShadowOffset(0, 0)
-        core:SetPoint("BOTTOM", btn, "TOP", xOffset, yOffset)
-        core:Hide()
+        timerText:SetFont(fontPath, timerSize, "OUTLINE")
+        timerText:SetJustifyH("CENTER")
+        timerText:SetTextColor(1.0, 1.0, 1.0)
+        timerText:SetShadowColor(0, 0, 0)
+        timerText:SetShadowOffset(1, -1)
+        timerText:SetPoint("BOTTOM", btn, "TOP", xOffset, timerYOffset)
+        timerText:Hide()
 
         designBArrowsBySpell[spellName] = {
-          core = core,
-          glow = glowArrow,
+          timer = timerText,
           borderGlow = borderGlow,
           borderRing = borderRing,
           srX = xOffset,
           srY = yOffset,
+          timerY = timerYOffset,
           baseSize = baseSize,
-          glowSize = glowSize,
+          timerSize = timerSize,
           fontPath = fontPath,
         }
       end
