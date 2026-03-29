@@ -43,6 +43,7 @@ local DEFAULT_ICON_FADE = 1.20
 local DEFAULT_TEXT_FADE = 1.20
 local DEFAULT_B_USED_ALPHA = 0.35
 local LOCK_AND_LOAD_DURATION = 10
+local AMMO_PROC_EVENT_FALLBACK = 8
 local SR_FONT_PATH = "Fonts\\FRIZQT__.TTF"
 
 local function SR_Print(msg)
@@ -294,7 +295,7 @@ end
 local function SetActiveAmmoProc(spell, r, g, b)
   if not spell then return end
   ammoPulse.eventSpell = spell
-  ammoPulse.eventExpiresAt = (GetTime and GetTime() or 0) + 1.5
+  ammoPulse.eventExpiresAt = (GetTime and GetTime() or 0) + AMMO_PROC_EVENT_FALLBACK
   ammoPulse.activeSpell = spell
   ammoPulse.t = 0
   ammoPulse.r = r or ammoPulse.r
