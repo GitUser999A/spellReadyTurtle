@@ -317,7 +317,6 @@ local function UpdateAmmoEventState(msg)
       local now = GetTime and GetTime() or 0
       ammoPulse.lockAndLoadActive = true
       ammoPulse.lockAndLoadExpiresAt = now + LOCK_AND_LOAD_DURATION
-      SetActiveAmmoProc("Aimed Shot", 1.0, 0.82, 0.0)
       ammoPulse.eventExpiresAt = now + LOCK_AND_LOAD_DURATION
     end
     return true
@@ -375,10 +374,12 @@ local function UpdateAmmoEventState(msg)
   if string.find(s, "aimed shot", 1, true) then
     ammoPulse.lockAndLoadActive = false
     ammoPulse.lockAndLoadExpiresAt = 0
-    ammoPulse.eventSpell = nil
-    ammoPulse.eventExpiresAt = 0
-    ammoPulse.activeSpell = nil
-    ammoPulse.scanT = 0
+    if ammoPulse.activeSpell == "Aimed Shot" then
+      ammoPulse.eventSpell = nil
+      ammoPulse.eventExpiresAt = 0
+      ammoPulse.activeSpell = nil
+      ammoPulse.scanT = 0
+    end
     return true
   end
 
